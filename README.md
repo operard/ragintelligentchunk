@@ -85,8 +85,13 @@ pip install oracledb pdfplumber pymupdf pillow pytesseract blingfire
 pip install sentence-transformers  # if EMBED_PROVIDER=local
 pip install cohere                 # if EMBED_PROVIDER=oci (Cohere-compatible)
 
-# For OCR (optional):
-# • Install Tesseract on macOS: `brew install tesseract`
+# For OCR on Ubuntu (optional):
+sudo add-apt-repository ppa:alex-p/tesseract-ocr5
+sudo apt update
+sudo apt upgrade
+sudo apt install tesseract-ocr
+pip3 install pytesseract
+
 ```
 
 
