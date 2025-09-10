@@ -1,0 +1,74 @@
+streamlit
+google-generativeai
+python-dotenv
+langchain
+langchain-community
+
+chromadb
+faiss-cpu
+# langchain_google_genai
+langchain-google-genai
+pandas
+numpy
+scipy
+scikit-learn
+matplotlib
+seaborn
+openpyxl
+python-dotenv
+PyYAML
+plotly
+plotly-express
+huggingface_hub
+langchain-text-splitters
+datasets
+accelerate
+bitsandbytes
+sentence-transformers
+
+pytesseract
+tesseract
+opencv-python
+
+#document loader 
+langchain-docling
+PyPDF2
+pymupdf 
+pymupdf4llm
+
+
+#new version of langchain
+langchain-chroma
+langchain-huggingface
+langchain-ollama==0.3.3
+
+
+#object detection models
+ultralytics
+ultralyticsplus
+
+#LLM Evaluation
+deepeval
+langchain-google-vertexai # for google vertex ai eval LLM 
+ragas 
+
+# AI Agents
+langgraph
+crewai==0.134.0  #0.121.0 
+crewai[tools]==0.134.0  #0.121.0
+# crewai-tools
+opik==1.7.26
+
+
+
+
+#LLM imferemce optmization
+vllm
+optimum
+fastembed  # for fast embedding cpu
+fastembed-gpu # for fast embedding gpu
+
+
+# litellm
+litellm==1.73.6
+opik==1.7.40  #1.7.13
