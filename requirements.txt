@@ -72,3 +72,6 @@ fastembed-gpu # for fast embedding gpu
 # litellm
 litellm==1.73.6
 opik==1.7.40  #1.7.13
+
+# OCI
+oci

@@ -106,16 +106,18 @@ python rag_pdf_oracle_hybrid_search.py ingest <PDF Directory> --ocr
 For processing document from OCI Object Storage and store to Oracle:
 
 ```bash
-python rag_pdf_oracle_hybrid_search.py rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> <prefix> --ocr
+python rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> <prefix> --ocr
 ```
 
 Example:
 
 ```bash
-python rag_pdf_oracle_hybrid_search.py rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> "" --ocr
+python rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> "" --ocr
 ```
 
 
 2. For Application GUI version: 
     running steamlit run rag_app.py for develop the application
+
+
 
