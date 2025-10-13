@@ -74,6 +74,10 @@ import dataclasses
 from dataclasses import dataclass
 from typing import List, Dict, Any, Iterable, Optional, Tuple
 
+import tempfile  # Para archivos temporales
+from oci_pdf_lister import OCIPDFObjectStorageLister  # Importa la librería que creamos
+
+
 # ----------------------------
 # Embedding providers
 # ----------------------------
@@ -523,6 +527,70 @@ def ingest_pdfs(folder: str, ocr_images=False):
             conn.commit()
             print(f"   Stored {len(chunks)} chunks into Oracle")
 
+
+
+def ingestfromoci(compartment_id, bucket_name, namespace_name, prefix="", ocr_images=False):
+    """
+    Ingests PDFs from OCI Object Storage instead of a local folder.
+    
+    :param compartment_id: ID del compartment de OCI.
+    :param bucket_name: Nombre del bucket.
+    :param namespace_name: Namespace del tenant.
+    :param prefix: Prefijo del directorio en el bucket (e.g., "documentos/"). Deja vacío para el root.
+    :param ocr_images: Parámetro para OCR (igual que antes).
+    """
+    embedder = get_embedder()
+    conn = connect_oracle()
+    print("--> oli: " + str(embedder.dim))
+    ensure_schema(conn, embedder.dim)
+
+    # Crea la instancia de la librería para acceder a OCI Object Storage
+    lister = OCIPDFObjectStorageLister(compartment_id, bucket_name, namespace_name)
+
+    # Lista los PDFs en el prefijo especificado
+    pdf_names = lister.list_pdf_files(prefix=prefix)
+
+    if not pdf_names:
+        print(f"No PDFs found in {bucket_name} under prefix '{prefix}'")
+        return
+
+    with conn.cursor() as cur:
+        for pdf_name in pdf_names:
+            print(f"→ Parsing {pdf_name}")
+            
+            # Descarga el PDF a un archivo temporal
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as temp_file:
+                temp_path = temp_file.name
+                success = lister.download_pdf(pdf_name, local_file_path=temp_path)
+                
+                if not success:
+                    print(f"   Failed to download {pdf_name}, skipping...")
+                    continue
+            
+            try:
+                # Procesa el PDF usando la ruta temporal
+                chunks = parse_pdf_to_chunks(temp_path, doc_id=pdf_name, ocr_images=ocr_images)
+                texts = [c.text for c in chunks]
+                print(f"   {len(texts)} chunks → embedding…")
+                vecs = embedder.embed_texts(texts)
+                for c, v in zip(chunks, vecs):
+                    cur.execute(UPSERT_SQL, dict(
+                        id=hash_id(f"{c.doc_id}|{c.page_no}|{c.chunk_ord}"),
+                        doc_id=c.doc_id,
+                        page_no=c.page_no,
+                        chunk_ord=c.chunk_ord,
+                        text=c.text,
+                        metadata=json.dumps(c.meta, ensure_ascii=False, default=str),
+                        embedding=array.array('f', v),  # wrap list into VectorType
+                    ))
+                
+                conn.commit()
+                print(f"   Stored {len(chunks)} chunks into Oracle")
+            
+            finally:
+                # Elimina el archivo temporal para liberar espacio
+                os.unlink(temp_path)
+
 # ----------------------------
 # Hybrid search (vector + lexical) with RRF
 # ----------------------------
@@ -652,7 +720,7 @@ Answer:"""
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python rag_pdf_oracle_hybrid_search.py <ingest|search|query> [args…]")
+        print("Usage: python rag_pdf_oracle_hybrid_search.py <ingest|ingestfromoci|search|query> [args…]")
         sys.exit(1)
     cmd = sys.argv[1]
     if cmd == "ingest":
@@ -662,6 +730,16 @@ def main():
         folder = sys.argv[2]
         ocr = "--ocr" in sys.argv
         ingest_pdfs(folder, ocr_images=ocr)
+    elif cmd == "ingestfromoci":
+        if len(sys.argv) < 3:
+            print("Usage: python rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> <prefix> [--ocr]")
+            sys.exit(1)            
+        compartment_id = sys.argv[2]
+        bucket_name = sys.argv[3]
+        namespace_name = sys.argv[4]
+        prefix = sys.argv[5]  # Opcional: directorio en el bucket
+        ocr = "--ocr" in sys.argv
+        ingestfromoci(compartment_id, bucket_name, namespace_name, prefix=prefix, ocr_images=ocr)
     elif cmd == "search":
         if len(sys.argv) < 3:
             print("Usage: python rag_pdf_oracle_hybrid_search.py search <query> [--k 8] [--out file.json]")
