@@ -80,10 +80,11 @@ This project mainly can divide into three main parts:
 
 ```Code
 python -m venv .venv && source .venv/bin/activate
-pip install --upgrade pip
-pip install oracledb pdfplumber pymupdf pillow pytesseract blingfire
-pip install sentence-transformers  # if EMBED_PROVIDER=local
-pip install cohere                 # if EMBED_PROVIDER=oci (Cohere-compatible)
+pip3 install --upgrade pip
+pip3 install oracledb pdfplumber pymupdf pillow pytesseract blingfire
+pip3 install sentence-transformers  # if EMBED_PROVIDER=local
+pip3 install cohere                 # if EMBED_PROVIDER=oci (Cohere-compatible)
+pip3 install streamlit
 
 # For OCR on Ubuntu (optional):
 sudo add-apt-repository ppa:alex-p/tesseract-ocr5
@@ -96,11 +97,24 @@ pip3 install pytesseract
 
 
 ### Run Application
-1. For processing document and store to Oracle:
+1. For processing document locally and store to Oracle:
      
 ```bash
 python rag_pdf_oracle_hybrid_search.py ingest <PDF Directory> --ocr
 ```
+
+For processing document from OCI Object Storage and store to Oracle:
+
+```bash
+python rag_pdf_oracle_hybrid_search.py rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> <prefix> --ocr
+```
+
+Example:
+
+```bash
+python rag_pdf_oracle_hybrid_search.py rag_pdf_oracle_hybrid_search.py ingestfromoci <compartment_id> <bucket_name> <namespace_name> "" --ocr
+```
+
 
 2. For Application GUI version: 
     running steamlit run rag_app.py for develop the application
