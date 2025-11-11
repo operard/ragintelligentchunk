@@ -387,7 +387,7 @@ def chunk_paragraphs(paragraphs: List[str], max_chars=1200, overlap_sents=1) -> 
     return [c for c in chunks if c]
 
 
-def parse_pdf_to_chunks(pdf_path: str, doc_id: Optional[str] = None, ocr_images=False) -> List[Chunk]:
+def parse_pdf_to_chunks(pdf_path: str, doc_id: Optional[str] = None, ocr_images=False, bTemp=False) -> List[Chunk]:
     import fitz  # PyMuPDF
     tables_by_page = extract_tables_pdfplumber(pdf_path)
     data = safe_read(pdf_path)
@@ -427,13 +427,21 @@ def parse_pdf_to_chunks(pdf_path: str, doc_id: Optional[str] = None, ocr_images=
             text_chunks = chunk_paragraphs(paras, max_chars=1200, overlap_sents=1)
 
             # Metadata common to page
-            page_meta = {
-                "page": pno+1,
-                "links": links,
-                "headings_top": [h for h,_ in headings],
-                "source_pdf": os.path.basename(pdf_path),
-            }
-
+            if bTemp:
+                page_meta = {
+                    "page": pno+1,
+                    "links": links,
+                    "headings_top": [h for h,_ in headings],
+                    "source_pdf": doc_id,
+                }
+            else:
+                page_meta = {
+                    "page": pno+1,
+                    "links": links,
+                    "headings_top": [h for h,_ in headings],
+                    "source_pdf": os.path.basename(pdf_path),
+                }
+                
             for i, t in enumerate(text_chunks):
                 meta = dict(page_meta)
                 meta["chunk_ord"] = i
@@ -518,7 +526,7 @@ def ingest_pdfs(folder: str, ocr_images=False):
     with conn.cursor() as cur:
         for pdf in pdf_paths:
             print(f"→ Parsing {pdf}")
-            chunks = parse_pdf_to_chunks(pdf, doc_id=os.path.basename(pdf), ocr_images=ocr_images)
+            chunks = parse_pdf_to_chunks(pdf, doc_id=os.path.basename(pdf), ocr_images=ocr_images, bTemp=False)
             if not chunks:
                 continue
             texts = [c.text for c in chunks]
@@ -590,7 +598,7 @@ def ingestfromoci(compartment_id, bucket_name, namespace_name, prefix="", ocr_im
             
             try:
                 # Procesa el PDF usando la ruta temporal
-                chunks = parse_pdf_to_chunks(temp_path, doc_id=pdf_name, ocr_images=ocr_images)
+                chunks = parse_pdf_to_chunks(temp_path, doc_id=pdf_name, ocr_images=ocr_images, bTemp=True)
                 if not chunks:
                     continue
                 texts = [c.text for c in chunks]
