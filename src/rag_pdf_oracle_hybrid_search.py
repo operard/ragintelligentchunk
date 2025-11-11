@@ -34,6 +34,7 @@ export ORA_PWD="YOUR_PASSWORD"
 # Option A: Local multilingual (default)
 export EMBED_PROVIDER=local
 export LOCAL_EMBED_MODEL=intfloat/multilingual-e5-large  # 1024-dim
+export LOCAL_EMBED_MODEL=intfloat/multilingual-e5-base  # 768-dim
 
 # Option B: OCI Generative AI or Cohere-compatible endpoint
 # (Cohere SDK supports a base_url; OCI exposes Cohere-compatible endpoints.)
@@ -92,7 +93,7 @@ class LocalHFEmbedder(Embedder):
         self.model_name = model_name
         self.model = SentenceTransformer(model_name)
         # Common multilingual dims: e5-large=1024, mpnet-multilingual=768
-        self.dim = 1024 if "e5" in model_name else 768
+        self.dim = 1024 if "e5-large" in model_name else 768
 
     def _prep(self, t: str) -> str:
         # e5 models expect "query: ..." / "passage: ..." formats; we'll use passage for indexing
@@ -190,6 +191,11 @@ SCHEMA_INDEX_SQL = [
     "CREATE VECTOR INDEX IF NOT EXISTS RAG_CHUNKS_VEC_IDX ON RAG_CHUNKS (EMBEDDING) ORGANIZATION IVF WITH (DISTANCE = COSINE)"
 ]
 
+DROP_INDEX_SQL = [
+    "DROP INDEX RAG_CHUNKS_TEXT_IDX",
+    "DROP INDEX RAG_CHUNKS_VEC_IDX FORCE"
+]
+
 UPSERT_SQL = """
 MERGE INTO RAG_CHUNKS t
 USING (
@@ -201,6 +207,15 @@ ON (t.ID = s.ID)
 WHEN MATCHED THEN UPDATE SET t.DOC_ID=s.DOC_ID, t.PAGE_NO=s.PAGE_NO, t.CHUNK_ORD=s.CHUNK_ORD, t.TEXT=s.TEXT, t.METADATA=s.METADATA, t.EMBEDDING=s.EMBEDDING
 WHEN NOT MATCHED THEN INSERT (ID, DOC_ID, PAGE_NO, CHUNK_ORD, TEXT, METADATA, EMBEDDING)
 VALUES (s.ID, s.DOC_ID, s.PAGE_NO, s.CHUNK_ORD, s.TEXT, s.METADATA, s.EMBEDDING)
+"""
+
+INSERT_SQL = """
+INSERT INTO RAG_CHUNKS (ID, DOC_ID, PAGE_NO, CHUNK_ORD, TEXT, METADATA, EMBEDDING)
+VALUES (:id, :doc_id, :page_no, :chunk_ord, :text, :metadata, :embedding)
+"""
+
+DELETE_DOC_SQL = """
+DELETE FROM RAG_CHUNKS WHERE DOC_ID = :doc_id
 """
 
 VSEARCH_SQL = """
@@ -439,20 +454,6 @@ def connect_oracle():
     return oracledb.connect(user=user, password=pwd, dsn=dsn)
 
 
-# def ensure_schema(conn, dim: int):
-#     with conn.cursor() as cur:
-#         # create table with dynamic dim
-#         cur.execute(SCHEMA_SQL, dict(dim=dim))
-#         for stmt in SCHEMA_INDEX_SQL:
-#             try:
-#                 cur.execute(stmt)
-#             except oracledb.DatabaseError as e:
-#                 # Older DBs don't support IF NOT EXISTS; try catch-and-ignore if already exists
-#                 if "ORA-" in str(e):
-#                     pass
-#         conn.commit()
-
-
 def ensure_schema(conn, dim: int):
     with conn.cursor() as cur:
         ddl = f"""
@@ -471,6 +472,11 @@ def ensure_schema(conn, dim: int):
         except oracledb.DatabaseError as e:
             if "ORA-00955" not in str(e):  # ignore "name is already used by existing object"
                 raise
+        conn.commit()
+
+
+def create_indexes(conn):
+    with conn.cursor() as cur:
         for stmt in SCHEMA_INDEX_SQL:
             try:
                 cur.execute(stmt)
@@ -480,13 +486,25 @@ def ensure_schema(conn, dim: int):
         conn.commit()
 
 
+def drop_indexes(conn):
+    with conn.cursor() as cur:
+        for stmt in DROP_INDEX_SQL:
+            try:
+                cur.execute(stmt)
+            except oracledb.DatabaseError as e:
+                if "ORA-01418" in str(e):  # index does not exist
+                    pass
+                else:
+                    raise
+        conn.commit()
+
+
 def ingest_pdfs(folder: str, ocr_images=False):
     embedder = get_embedder()
     conn = connect_oracle()
-    print ("--> oli: " + str(embedder.dim) )
     ensure_schema(conn, embedder.dim)
+    drop_indexes(conn)  # Drop indexes to speed up inserts
 
-    # pdf_paths = [os.path.join(folder, f) for f in os.listdir(folder) if f.lower().endswith(".pdf")]
     pdf_paths = [
         os.path.join(folder, f)
         for f in os.listdir(folder)
@@ -501,32 +519,35 @@ def ingest_pdfs(folder: str, ocr_images=False):
         for pdf in pdf_paths:
             print(f"→ Parsing {pdf}")
             chunks = parse_pdf_to_chunks(pdf, doc_id=os.path.basename(pdf), ocr_images=ocr_images)
+            if not chunks:
+                continue
             texts = [c.text for c in chunks]
             print(f"   {len(texts)} chunks → embedding…")
             vecs = embedder.embed_texts(texts)
+
+            # Delete existing chunks for this doc_id to avoid duplicates and use fast INSERT
+            cur.execute(DELETE_DOC_SQL, dict(doc_id=chunks[0].doc_id))
+            conn.commit()
+
+            # Prepare batch params
+            params_list = []
             for c, v in zip(chunks, vecs):
-                # cur.execute(UPSERT_SQL, dict(
-                #     id=hash_id(f"{c.doc_id}|{c.page_no}|{c.chunk_ord}"),
-                #     doc_id=c.doc_id,
-                #     page_no=c.page_no,
-                #     chunk_ord=c.chunk_ord,
-                #     text=c.text,
-                #     metadata=json.dumps(c.meta, ensure_ascii=False),
-                #     embedding=v,
-                # ))
-                cur.execute(UPSERT_SQL, dict(
+                params_list.append(dict(
                     id=hash_id(f"{c.doc_id}|{c.page_no}|{c.chunk_ord}"),
                     doc_id=c.doc_id,
                     page_no=c.page_no,
                     chunk_ord=c.chunk_ord,
                     text=c.text,
                     metadata=json.dumps(c.meta, ensure_ascii=False, default=str),
-                    embedding= array.array('f', v),   # wrap list into VectorType
+                    embedding=array.array('f', v),
                 ))
 
+            # Batch insert
+            cur.executemany(INSERT_SQL, params_list)
             conn.commit()
             print(f"   Stored {len(chunks)} chunks into Oracle")
 
+    create_indexes(conn)  # Recreate indexes after all inserts
 
 
 def ingestfromoci(compartment_id, bucket_name, namespace_name, prefix="", ocr_images=False):
@@ -541,8 +562,8 @@ def ingestfromoci(compartment_id, bucket_name, namespace_name, prefix="", ocr_im
     """
     embedder = get_embedder()
     conn = connect_oracle()
-    print("--> oli: " + str(embedder.dim))
     ensure_schema(conn, embedder.dim)
+    drop_indexes(conn)  # Drop indexes to speed up inserts
 
     # Crea la instancia de la librería para acceder a OCI Object Storage
     lister = OCIPDFObjectStorageLister(compartment_id, bucket_name, namespace_name)
@@ -570,26 +591,39 @@ def ingestfromoci(compartment_id, bucket_name, namespace_name, prefix="", ocr_im
             try:
                 # Procesa el PDF usando la ruta temporal
                 chunks = parse_pdf_to_chunks(temp_path, doc_id=pdf_name, ocr_images=ocr_images)
+                if not chunks:
+                    continue
                 texts = [c.text for c in chunks]
                 print(f"   {len(texts)} chunks → embedding…")
                 vecs = embedder.embed_texts(texts)
+
+                # Delete existing chunks for this doc_id to avoid duplicates and use fast INSERT
+                cur.execute(DELETE_DOC_SQL, dict(doc_id=chunks[0].doc_id))
+                conn.commit()
+
+                # Prepare batch params
+                params_list = []
                 for c, v in zip(chunks, vecs):
-                    cur.execute(UPSERT_SQL, dict(
+                    params_list.append(dict(
                         id=hash_id(f"{c.doc_id}|{c.page_no}|{c.chunk_ord}"),
                         doc_id=c.doc_id,
                         page_no=c.page_no,
                         chunk_ord=c.chunk_ord,
                         text=c.text,
                         metadata=json.dumps(c.meta, ensure_ascii=False, default=str),
-                        embedding=array.array('f', v),  # wrap list into VectorType
+                        embedding=array.array('f', v),
                     ))
-                
+
+                # Batch insert
+                cur.executemany(INSERT_SQL, params_list)
                 conn.commit()
                 print(f"   Stored {len(chunks)} chunks into Oracle")
             
             finally:
                 # Elimina el archivo temporal para liberar espacio
                 os.unlink(temp_path)
+
+    create_indexes(conn)  # Recreate indexes after all inserts
 
 # ----------------------------
 # Hybrid search (vector + lexical) with RRF
